@@ -1,0 +1,66 @@
+model:
+  model_id: taehv
+
+  # TAEHV architecture
+  latent_channels: 16
+  patch_size: 1
+  encoder_channels: 64
+  decoder_channels: [256, 128, 64, 64]
+  blocks_per_stage: 3
+
+  # Temporal scaling (WAN 2.1 defaults)
+  encoder_time_downscale: [true, true, false]
+  decoder_time_upscale: [false, true, true]
+  decoder_space_upscale: [true, true, true]
+
+  # Set to a .pth path to finetune from pretrained weights
+  checkpoint_path: null
+
+train:
+  trainer_id: taehv
+  data_id: video_dir_loader
+  data_kwargs:
+    source:
+      - /mnt/data/datasets/extracted_tars/kbm/fps/*/*.mp4
+      - /mnt/data/datasets/extracted_tars/kbm/3ps/*/*.mp4
+      - /mnt/data/datasets/extracted_tars/kbm/other/*/*.mp4
+    target_size: [64, 64]
+
+  # Reference VAE to distill from
+  ref_vae_id: wan2.1
+
+  # What to train
+  train_encoder: true
+  train_decoder: true
+
+  # Frame config
+  n_frames: 12
+  n_seraena_frames: 3
+
+  target_batch_size: 16
+  batch_size: 16
+
+  epochs: 200
+
+  opt: AdamW
+  opt_kwargs:
+    lr: 3.0e-4
+    weight_decay: 0.0
+    betas: [0.9, 0.95]
+
+  loss_weights:
+    l2: 1.0
+    gan: 1.0
+
+  scheduler: null
+
+  checkpoint_dir: checkpoints/taehv_wan2_1
+  resume_ckpt: null
+
+  sample_interval: 500
+  save_interval: 5000
+
+wandb:
+  name: ${env:WANDB_ENTITY}
+  project: taehv
+  run_name: taehv_wan2_1

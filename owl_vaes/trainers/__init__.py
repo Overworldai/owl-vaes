@@ -1,6 +1,6 @@
 from typing import Literal
 
-def get_trainer_cls(trainer_id: Literal["rec", "proxy", "audio_rec"]):
+def get_trainer_cls(trainer_id: Literal["rec", "proxy", "audio_rec", "taehv"]):
     match trainer_id:
         case "rec":
             from .rec import RecTrainer
@@ -32,5 +32,8 @@ def get_trainer_cls(trainer_id: Literal["rec", "proxy", "audio_rec"]):
         case "video_dito":
             from .video_dito import VideoDiToTrainer
             return VideoDiToTrainer
+        case "taehv":
+            from .taehv_trainer import TAEHVTrainer
+            return TAEHVTrainer
         case _:
             raise NotImplementedError
