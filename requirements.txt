@@ -19,3 +19,4 @@ diffusers
 pytorch-wavelets
 pywavelets
 accelerate
+av

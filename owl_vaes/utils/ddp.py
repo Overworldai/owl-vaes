@@ -2,7 +2,7 @@ import os
 import torch.distributed as dist
 import datetime as dt
 
-def setup(force=True, timeout=60):
+def setup(force=False, timeout=60):
     init_kwargs = dict(timeout=dt.timedelta(seconds=timeout)) if timeout else {}
 
     if not force:

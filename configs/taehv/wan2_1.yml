@@ -21,24 +21,22 @@ train:
   data_id: video_dir_loader
   data_kwargs:
     source:
-      - /mnt/data/datasets/extracted_tars/kbm/fps/*/*.mp4
-      - /mnt/data/datasets/extracted_tars/kbm/3ps/*/*.mp4
-      - /mnt/data/datasets/extracted_tars/kbm/other/*/*.mp4
-    target_size: [64, 64]
+     - /mnt/data/waypoint_1/owl_control/processed/*/recording.mp4
+    target_size: [720, 1280]
 
   # Reference VAE to distill from
   ref_vae_id: wan2.1
 
   # What to train
-  train_encoder: true
+  train_encoder: false
   train_decoder: true
 
   # Frame config
   n_frames: 12
   n_seraena_frames: 3
 
-  target_batch_size: 16
-  batch_size: 16
+  target_batch_size: 32
+  batch_size: 4
 
   epochs: 200
 
@@ -61,6 +59,6 @@ train:
   save_interval: 5000
 
 wandb:
-  name: ${env:WANDB_ENTITY}
+  name: d-fusion
   project: taehv
   run_name: taehv_wan2_1

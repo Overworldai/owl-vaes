@@ -16,14 +16,16 @@ class RandomRGBFromMP4s:
     - No persistent handles: each yield opens the chosen file once and closes it.
     - Duration/fps are computed lazily on first use and cached in memory.
     """
-    def __init__(self, source, seed=None, target_size=(360,640), window_length=1, suppress_warnings = True):
-        # Ensure source is a list
-        if isinstance(source, str):
-            source = [source]
+    def __init__(self, source, seed=None, target_size=(360,640), window_length=1, suppress_warnings = True, _resolved_paths=None):
         self.target_size = target_size  # (H, W)
         self.window_length = window_length
-        # 1. Collect all .mp4 files (can be glob, dir, list, …)
-        self.paths = self._find_mp4s(source)
+        # Use pre-resolved paths if provided, otherwise resolve from source
+        if _resolved_paths is not None:
+            self.paths = _resolved_paths
+        else:
+            if isinstance(source, str):
+                source = [source]
+            self.paths = self._find_mp4s(source)
 
         if not self.paths:
             raise RuntimeError("No videos found in the supplied source.")
@@ -218,7 +220,10 @@ class RandomRGBDataset(IterableDataset):
     """
     def __init__(self, source, seed: int = 0, target_size = (360, 640), window_length = 1, rank: int = 0, world_size: int = 1, suppress_warnings = True):
         super().__init__()
-        self.source = source
+        # Resolve globs eagerly in main process so workers don't repeat the work
+        self.paths = RandomRGBFromMP4s._find_mp4s(source)
+        if not self.paths:
+            raise RuntimeError("No videos found in the supplied source.")
         self.seed = int(seed)
         self.target_size = target_size
         self.window_length = window_length
@@ -232,7 +237,7 @@ class RandomRGBDataset(IterableDataset):
         # Derive a per-worker seed (works with persistent workers)
         # Incorporate rank to ensure different data across nodes
         wseed = (torch.initial_seed() + self.seed + wid + self.rank * 10000) % (2**32)
-        rng = RandomRGBFromMP4s(self.source, seed=int(wseed), target_size = self.target_size, window_length = self.window_length, suppress_warnings = self.suppress_warnings)
+        rng = RandomRGBFromMP4s(None, seed=int(wseed), target_size = self.target_size, window_length = self.window_length, suppress_warnings = self.suppress_warnings, _resolved_paths=self.paths)
         for rgb in rng:
             # HWC uint8 -> CHW uint8 (or THWC -> TCHW for windows)
             # clone() gives the tensor its own resizable storage, preventing rare 'resize_ not allowed' errors.

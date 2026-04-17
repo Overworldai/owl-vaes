@@ -152,6 +152,7 @@ class TAEHVTrainer(BaseTrainer):
             seraena = Seraena(
                 3 * self.n_seraena_frames,
                 ref_vae.latent_channels,
+                max_buff_len=256,
             ).to(self.device)
             if self.rank == 0:
                 s_params = sum(p.numel() for p in seraena.parameters())
@@ -225,13 +226,13 @@ class TAEHVTrainer(BaseTrainer):
                     losses = {}
 
                     if self.train_encoder:
-                        encoded = self.model.encode_video(ims, parallel=True, show_progress_bar=False)
+                        encoded = self.get_module().encode_video(ims, parallel=True, show_progress_bar=False)
                         enc_loss = F.mse_loss(encoded, ref_latent) / accum_steps
                         losses["encoder"] = enc_loss * l2_weight
                         metrics.log("enc_l2", enc_loss)
 
                     if self.train_decoder:
-                        decoded = self.model.decode_video(ref_latent, parallel=True, show_progress_bar=False)
+                        decoded = self.get_module().decode_video(ref_latent, parallel=True, show_progress_bar=False)
                         ims_target = ims[:, :-frames_to_trim]
                         rec_loss = F.mse_loss(decoded, ims_target) / accum_steps
                         losses["dec_rec"] = rec_loss * l2_weight
@@ -244,8 +245,8 @@ class TAEHVTrainer(BaseTrainer):
                                 # Time-average latents for Seraena context
                                 n_groups = self.n_frames // self.n_seraena_frames
                                 lat_ctx = ref_latent.mean(1, keepdim=True).repeat_interleave(n_groups, dim=1).flatten(0, 1)
-                                target, _ = seraena.step_and_make_correction_targets(grouped_real, grouped_fake, lat_ctx)
-                                target = ungroup_and_unpad(target)
+                            target, _ = seraena.step_and_make_correction_targets(grouped_real, grouped_fake, lat_ctx)
+                            target = ungroup_and_unpad(target)
 
                             gan_loss = F.mse_loss(decoded, target) / accum_steps
                             losses["dec_gan"] = gan_loss * gan_weight
