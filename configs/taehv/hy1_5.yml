@@ -2,7 +2,9 @@ model:
   model_id: taehv
 
   # TAEHV architecture
-  patch_size: 1
+  # patch_size=2 gives 16x total spatial (pixel_unshuffle 2x + 3 encoder stages of 2x each),
+  # matching HY 1.5 VAE's 16x spatial downscale.
+  patch_size: 2
   encoder_channels: 64
   decoder_channels: [256, 128, 64, 64]
   blocks_per_stage: 3
@@ -13,7 +15,7 @@ model:
   decoder_space_upscale: [true, true, true]
 
   # Set to a .pth path to finetune from pretrained weights
-  checkpoint_path: null
+  checkpoint_path: checkpoints/pretrained/taehv1_5.pth
 
 train:
   trainer_id: taehv
@@ -24,17 +26,17 @@ train:
     target_size: [720, 1280]
 
   # Reference VAE to distill from
-  ref_vae_id: wan2.1
+  ref_vae_id: hy1.5
 
   # What to train
   train_encoder: false
   train_decoder: true
 
-  # Frame config
-  n_frames: 12
+  # Frame config (HY 1.5 VAE requires n_frames = 4k+1)
+  n_frames: 13
   n_seraena_frames: 3
-  # Longer window used only during sample logging (must be > n_frames to take effect)
-  sample_n_frames: 48
+  # Sampling uses batch=1, so we can afford longer windows. Also 4k+1.
+  sample_n_frames: 49
 
   target_batch_size: 32
   batch_size: 4
@@ -53,7 +55,7 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/taehv_wan2_1
+  checkpoint_dir: checkpoints/taehv_hy1_5
   resume_ckpt: null
 
   sample_interval: 500
@@ -62,4 +64,4 @@ train:
 wandb:
   name: d-fusion
   project: taehv
-  run_name: taehv_wan2_1
+  run_name: taehv_hy1_5
