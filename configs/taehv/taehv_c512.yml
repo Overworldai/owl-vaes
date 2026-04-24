@@ -14,8 +14,6 @@ model:
   decoder_time_upscale: [false, true, true]
   decoder_space_upscale: [true, true, true]
 
-  # Set to a .pth path to finetune from pretrained weights
-  checkpoint_path: null
 
 train:
   trainer_id: taehv
@@ -38,8 +36,10 @@ train:
   # Sampling uses batch=1, so we can afford longer windows. Also 4k+1.
   sample_n_frames: 49
 
-  target_batch_size: 8
-  batch_size: 1
+  seraena_warmup_steps: 200
+
+  target_batch_size: 16
+  batch_size: 2
 
   epochs: 200
 
@@ -56,7 +56,7 @@ train:
   scheduler: null
 
   checkpoint_dir: /mnt/data/laplace/checkpoints/taehv_c512
-  resume_ckpt: null
+  resume_ckpt: /mnt/data/laplace/checkpoints/taehv_c512/step_15000.pt
 
   sample_interval: 500
   save_interval: 5000

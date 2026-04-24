@@ -15,7 +15,7 @@ model:
   decoder_space_upscale: [true, true, true]
 
   # Set to a .pth path to finetune from pretrained weights
-  checkpoint_path: checkpoints/pretrained/taehv1_5.pth
+  # checkpoint_path: checkpoints/pretrained/taehv1_5.pth
 
 train:
   trainer_id: taehv
@@ -55,8 +55,8 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: checkpoints/taehv_hy1_5
-  resume_ckpt: null
+  checkpoint_dir: /mnt/data/laplace/checkpoints/taehv_hy1_5
+  resume_ckpt: checkpoints/taehv_hy1_5/step_15000.pt 
 
   sample_interval: 500
   save_interval: 5000
@@ -64,4 +64,4 @@ train:
 wandb:
   name: d-fusion
   project: taehv
-  run_name: taehv_hy1_5
+  run_name: taehv_hy1_5_ft

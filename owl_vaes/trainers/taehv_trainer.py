@@ -138,6 +138,7 @@ class TAEHVTrainer(BaseTrainer):
         self.opt = None
         self.scheduler = None
         self.scaler = None
+        self.seraena = None
         self.total_step_counter = 0
 
     def save(self):
@@ -150,11 +151,18 @@ class TAEHVTrainer(BaseTrainer):
         }
         if self.scheduler is not None:
             save_dict["scheduler"] = self.scheduler.state_dict()
+        if self.seraena is not None:
+            save_dict["seraena"] = {
+                "model": self.seraena.state_dict(),
+                "opt": self.seraena.opt.state_dict(),
+                "scaler": self.seraena.scaler.state_dict(),
+                "buff": self.seraena.buff,
+            }
         super().save(save_dict)
 
     def load(self):
         if not hasattr(self.train_cfg, "resume_ckpt") or self.train_cfg.resume_ckpt is None:
-            return
+            return {"resumed": False, "seraena_loaded": False}
         save_dict = super().load(self.train_cfg.resume_ckpt)
         self.model.load_state_dict(save_dict["model"])
         self.ema.load_state_dict(save_dict["ema"])
@@ -163,6 +171,15 @@ class TAEHVTrainer(BaseTrainer):
         if self.scheduler is not None and "scheduler" in save_dict:
             self.scheduler.load_state_dict(save_dict["scheduler"])
         self.total_step_counter = save_dict["steps"]
+        seraena_loaded = False
+        if self.seraena is not None and "seraena" in save_dict:
+            s = save_dict["seraena"]
+            self.seraena.load_state_dict(s["model"])
+            self.seraena.opt.load_state_dict(s["opt"])
+            self.seraena.scaler.load_state_dict(s["scaler"])
+            self.seraena.buff = s["buff"]
+            seraena_loaded = True
+        return {"resumed": True, "seraena_loaded": seraena_loaded}
 
     def train(self):
         if "cuda" in self.device:
@@ -183,21 +200,29 @@ class TAEHVTrainer(BaseTrainer):
         # Move model to device
         self.model = self.model.to(self.device).train()
         if self.world_size > 1:
-            self.model = DDP(self.model, device_ids=[self.local_rank])
+            # find_unused_parameters=True because train_encoder=False leaves
+            # encoder params out of the backward graph; without this, DDP's reducer
+            # can mishandle the unused params.
+            self.model = DDP(
+                self.model,
+                device_ids=[self.local_rank],
+                find_unused_parameters=True,
+            )
 
-        # EMA
-        self.ema = EMA(self.model, beta=0.995, update_after_step=0, update_every=1)
+        # EMA wraps the inner (un-DDP'd) module so deepcopy doesn't pull in
+        # DDP/ProcessGroup state.
+        inner_model = self.model.module if self.world_size > 1 else self.model
+        self.ema = EMA(inner_model, beta=0.995, update_after_step=0, update_every=1)
 
         # Seraena (adversarial corrector) for decoder training
-        seraena = None
         if self.train_decoder and gan_weight > 0.0:
-            seraena = Seraena(
+            self.seraena = Seraena(
                 3 * self.n_seraena_frames,
                 ref_vae.latent_channels,
                 max_buff_len=256,
             ).to(self.device)
             if self.rank == 0:
-                s_params = sum(p.numel() for p in seraena.parameters())
+                s_params = sum(p.numel() for p in self.seraena.parameters())
                 print(f"Seraena parameters: {s_params:,}")
 
         # Optimizer
@@ -214,10 +239,14 @@ class TAEHVTrainer(BaseTrainer):
         accum_steps = self.train_cfg.target_batch_size // self.train_cfg.batch_size // self.world_size
         accum_steps = max(1, accum_steps)
 
-        self.scaler = torch.amp.GradScaler()
+        # bf16 has plenty of range — no loss-scaling needed. A per-rank enabled
+        # GradScaler will diverge in DDP: if one rank's initial unscaled grad hits
+        # inf and another rank's doesn't, scalers drift, skip-patterns diverge,
+        # some ranks get stuck perpetually skipping while others train. Disable.
+        self.scaler = torch.amp.GradScaler(enabled=False)
         ctx = torch.amp.autocast(self.device, torch.bfloat16)
 
-        self.load()
+        load_status = self.load()
 
         timer = Timer()
         timer.reset()
@@ -239,9 +268,9 @@ class TAEHVTrainer(BaseTrainer):
 
         frames_to_trim = self.get_module().frames_to_trim
 
-        # Optional: dedicated sample-time reader, always bs=1 to save VRAM (runs in main process,
-        # reuses already-resolved paths). When set, sampling always uses this path even if
-        # sample_n_frames == n_frames.
+        # Optional dedicated sample-time reader, always bs=1 to save VRAM (runs in
+        # main process, reuses already-resolved paths). When set, sampling uses this
+        # path even if sample_n_frames == n_frames.
         sample_n_frames = getattr(self.train_cfg, "sample_n_frames", None)
         sample_reader_iter = None
         if sample_n_frames is not None:
@@ -275,6 +304,47 @@ class TAEHVTrainer(BaseTrainer):
             n = x.shape[0] * self.n_seraena_frames // t_padded
             x = x.reshape(n, t_padded, 3, h, w)
             return x[:, :t_orig]
+
+        # Warm up Seraena's critic when resuming a checkpoint that predates
+        # Seraena persistence. Otherwise the fresh critic + empty replay buffer
+        # produce correction targets ≈ fakes, so gan_loss sits at ~0 for a long
+        # time while the decoder (already converged) doesn't move.
+        warmup_steps = getattr(self.train_cfg, "seraena_warmup_steps", 0)
+        if (
+            self.seraena is not None
+            and load_status["resumed"]
+            and not load_status["seraena_loaded"]
+            and warmup_steps > 0
+        ):
+            if self.rank == 0:
+                print(f"Warming up Seraena critic for {warmup_steps} steps...")
+            warmup_iter = iter(loader)
+            for wi in range(warmup_steps):
+                try:
+                    batch = next(warmup_iter)
+                except StopIteration:
+                    warmup_iter = iter(loader)
+                    batch = next(warmup_iter)
+                batch = batch.to(self.device)
+                ims = batch.mul(0.5).add_(0.5)
+                with ctx, torch.no_grad():
+                    ref_latent = ref_vae.encode(ims)
+                    decoded = self.get_module().decode_video(
+                        ref_latent, parallel=True, show_progress_bar=False
+                    )
+                    offset = ims.shape[1] - decoded.shape[1]
+                    ims_target = ims[:, offset:]
+                    grouped_real, t_padded, t_orig = pad_and_group(ims_target)
+                    grouped_fake, _, _ = pad_and_group(decoded)
+                    n_groups = t_padded // self.n_seraena_frames
+                    lat_ctx = ref_latent.mean(1, keepdim=True).repeat_interleave(n_groups, dim=1).flatten(0, 1)
+                # _disc_train_step: trains disc + fills replay buffer. Skips the
+                # correction backward we'd otherwise discard.
+                with ctx:
+                    debug = self.seraena._disc_train_step(grouped_real, grouped_fake, lat_ctx)
+                if self.rank == 0 and (wi + 1) % max(1, warmup_steps // 10) == 0:
+                    print(f"  [seraena warmup] step {wi+1}/{warmup_steps}  disc_loss={debug['disc_loss']:.4f}")
+            self.barrier()
 
         local_step = 0
 
@@ -311,14 +381,14 @@ class TAEHVTrainer(BaseTrainer):
                         losses["dec_rec"] = rec_loss * l2_weight
                         metrics.log("dec_l2", rec_loss)
 
-                        if seraena is not None and gan_weight > 0.0:
+                        if self.seraena is not None and gan_weight > 0.0:
                             with torch.no_grad():
                                 grouped_real, t_padded, t_orig = pad_and_group(ims_target)
                                 grouped_fake, _, _ = pad_and_group(decoded.detach())
                                 # Time-average latents for Seraena context — one ctx per group
                                 n_groups = t_padded // self.n_seraena_frames
                                 lat_ctx = ref_latent.mean(1, keepdim=True).repeat_interleave(n_groups, dim=1).flatten(0, 1)
-                            target, _ = seraena.step_and_make_correction_targets(grouped_real, grouped_fake, lat_ctx)
+                            target, _ = self.seraena.step_and_make_correction_targets(grouped_real, grouped_fake, lat_ctx)
                             target = ungroup_and_unpad(target, t_padded, t_orig)
 
                             gan_loss = F.mse_loss(decoded, target) / accum_steps
@@ -350,8 +420,6 @@ class TAEHVTrainer(BaseTrainer):
                         if self.total_step_counter % self.train_cfg.sample_interval == 0:
                             with ctx:
                                 ema_model = self.ema.ema_model
-                                if self.world_size > 1:
-                                    ema_model = ema_model.module
                                 if sample_reader_iter is not None:
                                     sample_np = next(sample_reader_iter)  # [T, H, W, C] uint8
                                     sample_batch = torch.from_numpy(sample_np).permute(0, 3, 1, 2).contiguous()
