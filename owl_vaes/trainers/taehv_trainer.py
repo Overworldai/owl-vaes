@@ -174,11 +174,17 @@ class TAEHVTrainer(BaseTrainer):
         seraena_loaded = False
         if self.seraena is not None and "seraena" in save_dict:
             s = save_dict["seraena"]
-            self.seraena.load_state_dict(s["model"])
-            self.seraena.opt.load_state_dict(s["opt"])
-            self.seraena.scaler.load_state_dict(s["scaler"])
-            self.seraena.buff = s["buff"]
-            seraena_loaded = True
+            try:
+                self.seraena.load_state_dict(s["model"])
+                self.seraena.opt.load_state_dict(s["opt"])
+                self.seraena.scaler.load_state_dict(s["scaler"])
+                self.seraena.buff = s["buff"]
+                seraena_loaded = True
+            except (RuntimeError, KeyError) as e:
+                # Architecture mismatch (e.g. BN→GN swap) — fall back to fresh
+                # init so warmup re-trains the critic from scratch.
+                if self.rank == 0:
+                    print(f"Could not restore Seraena state ({e.__class__.__name__}: {e}). Re-initializing.")
         return {"resumed": True, "seraena_loaded": seraena_loaded}
 
     def train(self):

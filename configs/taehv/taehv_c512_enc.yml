@@ -27,7 +27,7 @@ train:
   ref_vae_id: hy1.5
 
   # What to train
-  train_encoder: false
+  train_encoder: true
   train_decoder: true
 
   # Frame config (HY 1.5 VAE requires n_frames = 4k+1)
@@ -55,7 +55,7 @@ train:
 
   scheduler: null
 
-  checkpoint_dir: /mnt/data/laplace/checkpoints/taehv_c512_new
+  checkpoint_dir: /mnt/data/laplace/checkpoints/taehv_c512_enc
   resume_ckpt: null
 
   sample_interval: 500
@@ -64,4 +64,4 @@ train:
 wandb:
   name: d-fusion
   project: taehv
-  run_name: taehv_hy_c512
+  run_name: taehv_hy_c512_enc

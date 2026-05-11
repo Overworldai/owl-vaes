@@ -73,7 +73,9 @@ class Seraena(nn.Module):
         self.use_amp = use_amp
         # discriminator
         self.disc = PatchDiscWithContext(c_im=c_im, c_ctx=c_ctx)
-        self.scaler = th.cuda.amp.GradScaler(enabled=use_amp)
+        # bf16 has fp32 range — no GradScaler needed. Keeping a disabled
+        # scaler for backward compat with checkpoints that hold its state.
+        self.scaler = th.cuda.amp.GradScaler(enabled=False)
         self.opt = th.optim.AdamW(self.disc.parameters(), 3e-4, betas=(0.9, 0.99))
         # replay buffer of recent fake images
         self.buff = []
@@ -104,7 +106,7 @@ class Seraena(nn.Module):
             else:
                 self.buff.append((fake_i.clone(), ctx_i.clone()))
 
-        with th.cuda.amp.autocast(enabled=self.use_amp):
+        with th.cuda.amp.autocast(enabled=self.use_amp, dtype=th.bfloat16):
             fake_mask = th.rand_like(real[:, :1, :1, :1]) < 0.5
             in_ims = fake_mask * fake_shuf + ~fake_mask * real
             in_ctxs = fake_mask * fake_shuf_ctx + ~fake_mask * ctx
@@ -127,7 +129,7 @@ class Seraena(nn.Module):
         self.disc.eval()
 
         def featurizer(x):
-            with th.cuda.amp.autocast(enabled=self.use_amp):
+            with th.cuda.amp.autocast(enabled=self.use_amp, dtype=th.bfloat16):
                 return self.disc(x, ctx)
 
         correction = th.zeros_like(fake).requires_grad_(True)
